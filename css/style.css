@@ -385,3 +385,37 @@ canvas#progressChart {
 }
 
 .section-gap { margin-top: 24px; }
+
+/* ---------- backup banner ---------- */
+.backup-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(255, 111, 179, 0.1);
+  border: 1px solid rgba(255, 111, 179, 0.3);
+  border-radius: var(--radius);
+  padding: 13px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--text);
+}
+.backup-banner-actions { display: flex; gap: 8px; }
+.backup-banner-actions .btn { width: auto; }
+
+/* ---------- update toast ---------- */
+.update-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(70px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  background: var(--accent-grad);
+  color: #1a1123;
+  padding: 11px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgba(139, 92, 246, 0.45);
+  z-index: 60;
+  cursor: pointer;
+  white-space: nowrap;
+}
