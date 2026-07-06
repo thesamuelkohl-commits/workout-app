@@ -1,18 +1,29 @@
 /* Storage layer: everything lives in localStorage under one key. */
 const DB = (() => {
-  const KEY = 'workoutTrackerData_v1';
+  const KEY = 'workoutTrackerData_v2';
 
+  // type: 'strength' (weight x reps) or 'cardio' (time / incline / speed)
   const DEFAULT_EXERCISES = [
-    { name: 'Bench Press', muscle: 'Chest' },
-    { name: 'Squat', muscle: 'Legs' },
-    { name: 'Deadlift', muscle: 'Back' },
-    { name: 'Overhead Press', muscle: 'Shoulders' },
-    { name: 'Barbell Row', muscle: 'Back' },
-    { name: 'Pull-up', muscle: 'Back' },
-    { name: 'Bicep Curl', muscle: 'Arms' },
-    { name: 'Lat Pulldown', muscle: 'Back' },
-    { name: 'Leg Press', muscle: 'Legs' },
-    { name: 'Plank', muscle: 'Core' },
+    { name: 'Leg Press', muscle: 'Legs', type: 'strength' },
+    { name: 'Hip Thrust', muscle: 'Glutes', type: 'strength' },
+    { name: 'Bulgarian Split Squat', muscle: 'Legs', type: 'strength' },
+    { name: 'Hip Abductor', muscle: 'Glutes', type: 'strength' },
+    { name: 'Cable Kickbacks', muscle: 'Glutes', type: 'strength' },
+    { name: 'Lat Pulldown', muscle: 'Back', type: 'strength' },
+    { name: 'Seated Cable Row', muscle: 'Back', type: 'strength' },
+    { name: 'Incline Press', muscle: 'Chest', type: 'strength' },
+    { name: 'Shoulder Press', muscle: 'Shoulders', type: 'strength' },
+    { name: 'Bicep Curl', muscle: 'Arms', type: 'strength' },
+    { name: 'Tricep Pushdown', muscle: 'Arms', type: 'strength' },
+    { name: 'Romanian Deadlift', muscle: 'Legs', type: 'strength' },
+    { name: 'Seated Leg Curl', muscle: 'Legs', type: 'strength' },
+    { name: 'Leg Extension', muscle: 'Legs', type: 'strength' },
+    { name: 'Step Up', muscle: 'Legs', type: 'strength' },
+    { name: 'Abs', muscle: 'Core', type: 'strength' },
+    { name: 'Treadmill', muscle: 'Cardio', type: 'cardio' },
+    { name: 'Goblet Squat', muscle: 'Legs', type: 'strength' },
+    { name: 'Rows', muscle: 'Back', type: 'strength' },
+    { name: 'Glute Bridges', muscle: 'Glutes', type: 'strength' },
   ];
 
   function uid() {
@@ -37,7 +48,7 @@ const DB = (() => {
         return data;
       }
       const data = JSON.parse(raw);
-      data.exercises = data.exercises || [];
+      data.exercises = (data.exercises || []).map((e) => ({ type: 'strength', ...e }));
       data.plans = data.plans || [];
       data.logs = data.logs || [];
       data.settings = data.settings || { unit: 'lbs' };
@@ -67,8 +78,8 @@ const DB = (() => {
     },
 
     // Exercises
-    addExercise(name, muscle) {
-      const ex = { id: uid(), name: name.trim(), muscle: (muscle || '').trim() };
+    addExercise(name, muscle, type) {
+      const ex = { id: uid(), name: name.trim(), muscle: (muscle || '').trim(), type: type === 'cardio' ? 'cardio' : 'strength' };
       state.exercises.push(ex);
       persist();
       return ex;
@@ -103,13 +114,20 @@ const DB = (() => {
     },
 
     // Logs. A log entry = one exercise performed on one date with N sets.
+    // Sets are stored generically: strength sets look like {weight, reps},
+    // cardio sets look like {time, incline, speed}. Whatever keys are passed
+    // in are coerced to numbers and kept as-is.
     addLog(exerciseId, sets, planId, dateISO) {
       const entry = {
         id: uid(),
         date: dateISO || new Date().toISOString(),
         exerciseId,
         planId: planId || null,
-        sets: sets.map((s) => ({ weight: Number(s.weight) || 0, reps: Number(s.reps) || 0 })),
+        sets: sets.map((s) => {
+          const out = {};
+          Object.keys(s).forEach((k) => (out[k] = Number(s[k]) || 0));
+          return out;
+        }),
       };
       state.logs.push(entry);
       persist();
