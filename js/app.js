@@ -35,6 +35,56 @@
   function unit() {
     return DB.state.settings.unit || 'lbs';
   }
+
+  // ---------- backup reminders ----------
+  const BACKUP_KEY = 'workoutTrackerLastBackup';
+  const BACKUP_DISMISS_KEY = 'workoutTrackerBackupDismissUntil';
+  function daysSince(ts) {
+    return Math.floor((Date.now() - ts) / 86400000);
+  }
+  function lastBackupInfo() {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (!raw) return { never: true, days: null };
+    return { never: false, days: daysSince(Number(raw)) };
+  }
+  function markBackedUp() {
+    localStorage.setItem(BACKUP_KEY, String(Date.now()));
+  }
+  function backupIsOverdue() {
+    const info = lastBackupInfo();
+    if (!DB.state.logs.length) return false; // nothing to lose yet
+    if (info.never) return true;
+    return info.days >= 21;
+  }
+  function backupDismissed() {
+    const raw = localStorage.getItem(BACKUP_DISMISS_KEY);
+    return raw && Number(raw) > Date.now();
+  }
+  function dismissBackupBanner() {
+    localStorage.setItem(BACKUP_DISMISS_KEY, String(Date.now() + 3 * 86400000)); // snooze 3 days
+  }
+  function renderBackupBanner() {
+    if (!backupIsOverdue() || backupDismissed()) return '';
+    return `
+      <div class="backup-banner" data-action="none">
+        <span>${lastBackupInfo().never ? "You haven't backed up your data yet." : `It's been ${lastBackupInfo().days} days since your last backup.`} </span>
+        <div class="backup-banner-actions">
+          <button class="btn small" data-action="backup-now">Export now</button>
+          <button class="btn ghost small" data-action="dismiss-backup">Not now</button>
+        </div>
+      </div>
+    `;
+  }
+  function doExport() {
+    const blob = new Blob([DB.exportJSON()], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `workout-data-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    markBackedUp();
+  }
   function esc(str) {
     return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
@@ -83,6 +133,7 @@
     const todays = DB.logsOnDay(todayISO());
     view.innerHTML = `
       <h2>Log a workout</h2>
+      ${renderBackupBanner()}
       <div class="card">
         <div class="field">
           <label>Exercise</label>
@@ -452,6 +503,14 @@
           <option value="kg" ${unit() === 'kg' ? 'selected' : ''}>kg</option>
         </select>
       </div>
+      <div class="field">
+        <label>Backups</label>
+        <div class="meta" id="backupStatus">${
+          lastBackupInfo().never
+            ? "You haven't exported a backup yet."
+            : `Last backup: ${lastBackupInfo().days === 0 ? 'today' : lastBackupInfo().days + ' day(s) ago'}.`
+        }</div>
+      </div>
       <button class="btn secondary" id="exportBtn" style="margin-bottom:8px;">Export data (JSON)</button>
       <div class="field">
         <label>Import data (JSON file)</label>
@@ -464,13 +523,9 @@
       render();
     });
     document.getElementById('exportBtn').addEventListener('click', () => {
-      const blob = new Blob([DB.exportJSON()], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `workout-data-${todayISO()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      doExport();
+      const statusEl = document.getElementById('backupStatus');
+      if (statusEl) statusEl.textContent = 'Last backup: today.';
     });
     document.getElementById('importFile').addEventListener('change', (e) => {
       const file = e.target.files[0];
@@ -566,6 +621,12 @@
         DB.deletePlan(btn.dataset.id);
         render();
       }
+    } else if (action === 'backup-now') {
+      doExport();
+      render();
+    } else if (action === 'dismiss-backup') {
+      dismissBackupBanner();
+      render();
     }
   });
 
@@ -596,11 +657,32 @@
     }
   });
 
-  // Register service worker for offline/installable support.
+  // Register service worker for offline/installable support, and let the
+  // user know (without ever touching their saved data) when a new version
+  // of the app has finished downloading in the background.
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      navigator.serviceWorker.register('sw.js').then((reg) => {
+        // Check for a newer sw.js whenever the app is brought back to the foreground.
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      }).catch(() => {});
     });
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      showUpdateToast();
+    });
+  }
+
+  function showUpdateToast() {
+    if (document.getElementById('updateToast')) return;
+    const el = document.createElement('div');
+    el.id = 'updateToast';
+    el.className = 'update-toast';
+    el.textContent = '⬆️ Update ready — tap to refresh';
+    el.addEventListener('click', () => window.location.reload());
+    document.body.appendChild(el);
   }
 
   render();
