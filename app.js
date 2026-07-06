@@ -9,6 +9,16 @@
   // Draft state for the "add a set of logs" form on the Log tab.
   let logDraft = { exerciseId: '', planExerciseIds: null, sets: [{ weight: '', reps: '' }] };
 
+  const CARDIO_FIELDS = [
+    { key: 'time', placeholder: 'time (min)' },
+    { key: 'incline', placeholder: 'incline %' },
+    { key: 'speed', placeholder: 'speed (mph)' },
+  ];
+  const STRENGTH_FIELDS = [
+    { key: 'weight', placeholder: null },
+    { key: 'reps', placeholder: 'reps' },
+  ];
+
   // ---------- helpers ----------
   function todayISO() {
     return new Date().toISOString().slice(0, 10);
@@ -35,12 +45,28 @@
       exs.map((e) => `<option value="${e.id}" ${e.id === selectedId ? 'selected' : ''}>${esc(e.name)}</option>`).join('')
     );
   }
+  function exerciseType(exId) {
+    return DB.exerciseById(exId)?.type === 'cardio' ? 'cardio' : 'strength';
+  }
+  function fieldsForType(type) {
+    return type === 'cardio' ? CARDIO_FIELDS : STRENGTH_FIELDS;
+  }
+  function emptySet(type) {
+    const out = {};
+    fieldsForType(type).forEach((f) => (out[f.key] = ''));
+    return out;
+  }
   function setDraftDefaultsForExercise(exId) {
+    const type = exerciseType(exId);
     const lastLog = DB.logsForExercise(exId).slice(-1)[0];
     if (lastLog) {
-      logDraft.sets = lastLog.sets.map((s) => ({ weight: String(s.weight), reps: String(s.reps) }));
+      logDraft.sets = lastLog.sets.map((s) => {
+        const out = {};
+        fieldsForType(type).forEach((f) => (out[f.key] = s[f.key] !== undefined ? String(s[f.key]) : ''));
+        return out;
+      });
     } else {
-      logDraft.sets = [{ weight: '', reps: '' }];
+      logDraft.sets = [emptySet(type)];
     }
   }
 
@@ -97,18 +123,40 @@
 
   function renderSetsInto(container) {
     if (!container) return;
+    const type = exerciseType(logDraft.exerciseId);
+    const fields = fieldsForType(type);
     container.innerHTML = logDraft.sets
-      .map(
-        (s, i) => `
+      .map((s, i) => {
+        const inputs = fields
+          .map((f, fi) => {
+            const placeholder = f.key === 'weight' ? `weight (${unit()})` : f.placeholder;
+            const sep = type === 'strength' && fi === 0 ? '<span class="x">×</span>' : '';
+            return `<input type="number" inputmode="decimal" placeholder="${esc(placeholder)}" data-set-field="${f.key}" data-idx="${i}" value="${esc(s[f.key])}" />${sep}`;
+          })
+          .join('');
+        return `
       <div class="set-row">
         <span class="set-idx">${i + 1}</span>
-        <input type="number" inputmode="decimal" placeholder="weight (${unit()})" data-set-field="weight" data-idx="${i}" value="${esc(s.weight)}" />
-        <span class="x">×</span>
-        <input type="number" inputmode="numeric" placeholder="reps" data-set-field="reps" data-idx="${i}" value="${esc(s.reps)}" />
+        ${inputs}
         ${logDraft.sets.length > 1 ? `<button class="remove-set" data-action="remove-set" data-idx="${i}">✕</button>` : ''}
-      </div>`
-      )
+      </div>`;
+      })
       .join('');
+  }
+
+  function formatSet(s, type) {
+    if (type === 'cardio') {
+      const parts = [];
+      if (s.time) parts.push(`${s.time}min`);
+      if (s.incline) parts.push(`${s.incline}% incline`);
+      if (s.speed) parts.push(`${s.speed}mph`);
+      return parts.join(' • ') || '—';
+    }
+    return `${s.weight}${unit()}×${s.reps}`;
+  }
+  function setsSummary(l) {
+    const type = exerciseType(l.exerciseId);
+    return l.sets.map((s) => formatSet(s, type)).join(', ');
   }
 
   function renderLogEntries(entries) {
@@ -117,7 +165,7 @@
       .reverse()
       .map((l) => {
         const ex = DB.exerciseById(l.exerciseId);
-        const setsStr = l.sets.map((s) => `${s.weight}${unit()}×${s.reps}`).join(', ');
+        const setsStr = setsSummary(l);
         return `
         <div class="list-item">
           <div>
@@ -197,13 +245,16 @@
   // ---------- PROGRESS TAB ----------
   function renderProgress() {
     if (!progressExerciseId && DB.state.exercises.length) progressExerciseId = DB.state.exercises[0].id;
+    const type = exerciseType(progressExerciseId);
     const logs = progressExerciseId ? DB.logsForExercise(progressExerciseId) : [];
 
-    let maxWeight = 0,
+    let bestValue = 0,
       totalSessions = logs.length,
       lastDate = '—';
-    logs.forEach((l) => l.sets.forEach((s) => (maxWeight = Math.max(maxWeight, s.weight))));
+    const metricKey = type === 'cardio' ? 'speed' : 'weight';
+    logs.forEach((l) => l.sets.forEach((s) => (bestValue = Math.max(bestValue, s[metricKey] || 0))));
     if (logs.length) lastDate = fmtDate(logs[logs.length - 1].date);
+    const bestLabel = type === 'cardio' ? 'MAX SPEED' : `MAX ${unit().toUpperCase()}`;
 
     view.innerHTML = `
       <h2>Progress</h2>
@@ -212,7 +263,7 @@
       </div>
 
       <div class="stat-grid">
-        <div class="stat-box"><div class="val">${maxWeight || '—'}</div><div class="lbl">MAX ${unit().toUpperCase()}</div></div>
+        <div class="stat-box"><div class="val">${bestValue || '—'}</div><div class="lbl">${bestLabel}</div></div>
         <div class="stat-box"><div class="val">${totalSessions}</div><div class="lbl">SESSIONS</div></div>
         <div class="stat-box"><div class="val">${lastDate}</div><div class="lbl">LAST DONE</div></div>
       </div>
@@ -227,9 +278,10 @@
                 .slice()
                 .reverse()
                 .map((l) => {
-                  const best = l.sets.reduce((m, s) => Math.max(m, s.weight), 0);
-                  const setsStr = l.sets.map((s) => `${s.weight}×${s.reps}`).join(', ');
-                  return `<div class="list-item"><div><div>${fmtDate(l.date)}</div><div class="meta">${esc(setsStr)}</div></div><div class="meta">best ${best}${unit()}</div></div>`;
+                  const best = l.sets.reduce((m, s) => Math.max(m, s[metricKey] || 0), 0);
+                  const setsStr = setsSummary(l);
+                  const bestStr = type === 'cardio' ? `top ${best}mph` : `best ${best}${unit()}`;
+                  return `<div class="list-item"><div><div>${fmtDate(l.date)}</div><div class="meta">${esc(setsStr)}</div></div><div class="meta">${bestStr}</div></div>`;
                 })
                 .join('')}</div>`
             : '<div class="empty-state">No history for this exercise yet.</div>'
@@ -237,10 +289,10 @@
       </div>
     `;
 
-    drawChart(logs);
+    drawChart(logs, metricKey);
   }
 
-  function drawChart(logs) {
+  function drawChart(logs, metricKey) {
     const canvas = document.getElementById('progressChart');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -253,22 +305,26 @@
       ctx.fillText('No data yet', 16, h / 2);
       return;
     }
-    const points = logs.map((l) => Math.max(...l.sets.map((s) => s.weight)));
+    const points = logs.map((l) => Math.max(...l.sets.map((s) => s[metricKey] || 0)));
     const padding = 24;
     const maxY = Math.max(...points, 1);
     const minY = Math.min(...points, 0);
     const range = maxY - minY || 1;
     const stepX = points.length > 1 ? (w - padding * 2) / (points.length - 1) : 0;
 
-    ctx.strokeStyle = '#2b2f3a';
+    ctx.strokeStyle = '#362a4d';
     ctx.beginPath();
     ctx.moveTo(padding, h - padding);
     ctx.lineTo(w - padding, h - padding);
     ctx.stroke();
 
+    const grad = ctx.createLinearGradient(padding, 0, w - padding, 0);
+    grad.addColorStop(0, '#ff6fb3');
+    grad.addColorStop(1, '#8b5cf6');
+
     ctx.beginPath();
-    ctx.strokeStyle = '#4fd1c5';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2.5;
     points.forEach((p, i) => {
       const x = padding + stepX * i;
       const y = h - padding - ((p - minY) / range) * (h - padding * 2);
@@ -277,16 +333,16 @@
     });
     ctx.stroke();
 
-    ctx.fillStyle = '#4fd1c5';
+    ctx.fillStyle = '#ff6fb3';
     points.forEach((p, i) => {
       const x = padding + stepX * i;
       const y = h - padding - ((p - minY) / range) * (h - padding * 2);
       ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    ctx.fillStyle = '#97a0b0';
+    ctx.fillStyle = '#ad9fc7';
     ctx.font = '11px sans-serif';
     ctx.fillText(String(maxY), 4, padding);
     ctx.fillText(String(minY), 4, h - padding + 4);
@@ -340,7 +396,11 @@
           <input id="newExName" type="text" placeholder="Exercise name" />
           <input id="newExMuscle" type="text" placeholder="Muscle group" />
         </div>
-        <button class="btn secondary" id="addExBtn" style="margin-top:8px;">Add exercise</button>
+        <select id="newExType" style="margin-top:8px;width:100%;">
+          <option value="strength">Strength (weight × reps)</option>
+          <option value="cardio">Cardio (time / incline / speed)</option>
+        </select>
+        <button class="btn secondary" id="addExBtn" style="margin-top:10px;">Add exercise</button>
       </div>
       <div id="exerciseListWrap"></div>
     `
@@ -349,8 +409,9 @@
     document.getElementById('addExBtn').addEventListener('click', () => {
       const name = document.getElementById('newExName').value.trim();
       const muscle = document.getElementById('newExMuscle').value.trim();
+      const type = document.getElementById('newExType').value;
       if (!name) return;
-      DB.addExercise(name, muscle);
+      DB.addExercise(name, muscle, type);
       document.getElementById('newExName').value = '';
       document.getElementById('newExMuscle').value = '';
       renderExerciseListWrap();
@@ -365,7 +426,7 @@
       .map(
         (e) => `
       <div class="list-item">
-        <div><div>${esc(e.name)}</div><div class="meta">${esc(e.muscle || '')}</div></div>
+        <div><div>${esc(e.name)}</div><div class="meta">${esc(e.muscle || '')}${e.type === 'cardio' ? ' • Cardio' : ''}</div></div>
         <div class="actions"><button data-action="delete-exercise" data-id="${e.id}">🗑</button></div>
       </div>`
       )
@@ -463,7 +524,11 @@
     const action = btn.dataset.action;
 
     if (action === 'add-set') {
-      logDraft.sets.push({ weight: logDraft.sets.at(-1)?.weight || '', reps: logDraft.sets.at(-1)?.reps || '' });
+      const type = exerciseType(logDraft.exerciseId);
+      const last = logDraft.sets.at(-1) || {};
+      const next = {};
+      fieldsForType(type).forEach((f) => (next[f.key] = last[f.key] || ''));
+      logDraft.sets.push(next);
       renderSetsInto(document.getElementById('setsContainer'));
     } else if (action === 'remove-set') {
       logDraft.sets.splice(Number(btn.dataset.idx), 1);
@@ -473,13 +538,14 @@
         alert('Pick an exercise first.');
         return;
       }
-      const validSets = logDraft.sets.filter((s) => s.weight !== '' || s.reps !== '');
+      const validSets = logDraft.sets.filter((s) => Object.values(s).some((v) => v !== ''));
       if (!validSets.length) {
         alert('Add at least one set.');
         return;
       }
       DB.addLog(logDraft.exerciseId, validSets);
-      logDraft = { exerciseId: logDraft.exerciseId, sets: [{ weight: '', reps: '' }] };
+      const type = exerciseType(logDraft.exerciseId);
+      logDraft = { exerciseId: logDraft.exerciseId, sets: [emptySet(type)] };
       setDraftDefaultsForExercise(logDraft.exerciseId);
       renderLog();
     } else if (action === 'delete-log') {
