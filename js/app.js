@@ -125,6 +125,7 @@
     if (currentTab === 'log') renderLog();
     else if (currentTab === 'plans') renderPlans();
     else if (currentTab === 'progress') renderProgress();
+    else if (currentTab === 'weight') renderWeight();
     else if (currentTab === 'history') renderHistory();
   }
 
@@ -344,19 +345,27 @@
   }
 
   function drawChart(logs, metricKey) {
-    const canvas = document.getElementById('progressChart');
+    const points = logs.map((l) => Math.max(...l.sets.map((s) => s[metricKey] || 0)));
+    drawPointsChart('progressChart', points);
+  }
+
+  function drawWeightChart(entries) {
+    drawPointsChart('weightChart', entries.map((e) => e.weight));
+  }
+
+  function drawPointsChart(canvasId, points) {
+    const canvas = document.getElementById(canvasId);
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const w = canvas.width,
       h = canvas.height;
     ctx.clearRect(0, 0, w, h);
-    if (logs.length < 1) {
+    if (points.length < 1) {
       ctx.fillStyle = '#7d8390';
       ctx.font = '13px sans-serif';
       ctx.fillText('No data yet', 16, h / 2);
       return;
     }
-    const points = logs.map((l) => Math.max(...l.sets.map((s) => s[metricKey] || 0)));
     const padding = 24;
     const maxY = Math.max(...points, 1);
     const minY = Math.min(...points, 0);
@@ -397,6 +406,66 @@
     ctx.font = '11px sans-serif';
     ctx.fillText(String(maxY), 4, padding);
     ctx.fillText(String(minY), 4, h - padding + 4);
+  }
+
+  // ---------- WEIGHT TAB ----------
+  function renderWeight() {
+    const entries = DB.bodyWeightsSorted();
+    const todayEntry = entries.find((e) => e.date === todayISO());
+    const latest = entries.length ? entries[entries.length - 1] : null;
+    const first = entries.length ? entries[0] : null;
+    const hasChange = entries.length > 1;
+    const change = hasChange ? latest.weight - first.weight : 0;
+    const changeStr = hasChange ? `${change > 0 ? '+' : ''}${change.toFixed(1)}${unit()}` : '—';
+
+    view.innerHTML = `
+      <h2>Body weight</h2>
+      <div class="card">
+        <div class="row">
+          <div class="field">
+            <label>Date</label>
+            <input type="date" id="weightDateInput" value="${todayISO()}" />
+          </div>
+          <div class="field">
+            <label>Weight (${unit()})</label>
+            <input type="number" inputmode="decimal" id="weightValueInput" placeholder="e.g. 145" value="${todayEntry ? todayEntry.weight : ''}" />
+          </div>
+        </div>
+        <button class="btn" data-action="save-weight">Save weight</button>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-box"><div class="val">${latest ? latest.weight : '—'}</div><div class="lbl">CURRENT ${unit().toUpperCase()}</div></div>
+        <div class="stat-box"><div class="val">${entries.length}</div><div class="lbl">ENTRIES</div></div>
+        <div class="stat-box"><div class="val">${changeStr}</div><div class="lbl">CHANGE</div></div>
+      </div>
+
+      <canvas id="weightChart" width="600" height="180"></canvas>
+
+      <div class="section-gap">
+        <h3>History</h3>
+        ${
+          entries.length
+            ? `<div class="card">${entries
+                .slice()
+                .reverse()
+                .map(
+                  (e) => `
+              <div class="list-item">
+                <div>${fmtDate(e.date)}</div>
+                <div style="display:flex;align-items:center;gap:14px;">
+                  <div class="meta">${e.weight}${unit()}</div>
+                  <div class="actions"><button data-action="delete-weight" data-id="${e.id}" aria-label="Delete">🗑</button></div>
+                </div>
+              </div>`
+                )
+                .join('')}</div>`
+            : "<div class=\"empty-state\">No weight logged yet. Add today's weight above.</div>"
+        }
+      </div>
+    `;
+
+    drawWeightChart(entries);
   }
 
   // ---------- HISTORY TAB ----------
@@ -627,6 +696,19 @@
     } else if (action === 'dismiss-backup') {
       dismissBackupBanner();
       render();
+    } else if (action === 'save-weight') {
+      const dateEl = document.getElementById('weightDateInput');
+      const valEl = document.getElementById('weightValueInput');
+      const val = valEl ? valEl.value : '';
+      if (!val) {
+        alert('Enter a weight first.');
+        return;
+      }
+      DB.addBodyWeight(dateEl && dateEl.value ? dateEl.value : todayISO(), val);
+      renderWeight();
+    } else if (action === 'delete-weight') {
+      DB.deleteBodyWeight(btn.dataset.id);
+      renderWeight();
     }
   });
 

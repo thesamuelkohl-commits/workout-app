@@ -19,6 +19,7 @@ const DB = (() => {
     { name: 'Seated Leg Curl', muscle: 'Legs', type: 'strength' },
     { name: 'Leg Extension', muscle: 'Legs', type: 'strength' },
     { name: 'Step Up', muscle: 'Legs', type: 'strength' },
+    { name: 'Walking Lunges', muscle: 'Legs', type: 'strength' },
     { name: 'Abs', muscle: 'Core', type: 'strength' },
     { name: 'Treadmill', muscle: 'Cardio', type: 'cardio' },
     { name: 'Goblet Squat', muscle: 'Legs', type: 'strength' },
@@ -35,8 +36,22 @@ const DB = (() => {
       exercises: DEFAULT_EXERCISES.map((e) => ({ id: uid(), ...e })),
       plans: [],
       logs: [],
+      bodyWeights: [],
       settings: { unit: 'lbs' },
     };
+  }
+
+  // Adds any built-in default exercises the user doesn't already have
+  // (matched by name, case-insensitive), so new defaults introduced in an
+  // app update show up for existing installs without touching their data.
+  function fillMissingDefaults(data) {
+    const existingNames = new Set(data.exercises.map((e) => e.name.trim().toLowerCase()));
+    DEFAULT_EXERCISES.forEach((def) => {
+      if (!existingNames.has(def.name.toLowerCase())) {
+        data.exercises.push({ id: uid(), ...def });
+      }
+    });
+    return data;
   }
 
   function load() {
@@ -51,7 +66,10 @@ const DB = (() => {
       data.exercises = (data.exercises || []).map((e) => ({ type: 'strength', ...e }));
       data.plans = data.plans || [];
       data.logs = data.logs || [];
+      data.bodyWeights = data.bodyWeights || [];
       data.settings = data.settings || { unit: 'lbs' };
+      fillMissingDefaults(data);
+      save(data);
       return data;
     } catch (e) {
       console.error('Failed to load data, resetting.', e);
@@ -141,6 +159,29 @@ const DB = (() => {
     deleteLog(id) {
       state.logs = state.logs.filter((l) => l.id !== id);
       persist();
+    },
+
+    // Body weight. One entry per calendar day; logging again on the same
+    // day overwrites that day's value instead of creating a duplicate.
+    addBodyWeight(dateISO, weight) {
+      const dateStr = (dateISO || new Date().toISOString()).slice(0, 10);
+      const w = Number(weight) || 0;
+      const existing = state.bodyWeights.find((b) => b.date.slice(0, 10) === dateStr);
+      if (existing) {
+        existing.weight = w;
+      } else {
+        state.bodyWeights.push({ id: uid(), date: dateStr, weight: w });
+      }
+      persist();
+    },
+    deleteBodyWeight(id) {
+      state.bodyWeights = state.bodyWeights.filter((b) => b.id !== id);
+      persist();
+    },
+    bodyWeightsSorted() {
+      return state.bodyWeights
+        .slice()
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     },
 
     // Settings
