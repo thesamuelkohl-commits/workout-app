@@ -7,7 +7,7 @@
   let progressExerciseId = null;
 
   // Draft state for the "add a set of logs" form on the Log tab.
-  let logDraft = { exerciseId: '', planExerciseIds: null, sets: [{ weight: '', reps: '' }] };
+  let logDraft = { exerciseId: '', planExerciseIds: null, sets: [{ weight: '', reps: '' }], date: todayISO() };
 
   const CARDIO_FIELDS = [
     { key: 'time', placeholder: 'time (min)' },
@@ -131,11 +131,16 @@
 
   // ---------- LOG TAB ----------
   function renderLog() {
-    const todays = DB.logsOnDay(todayISO());
+    const dayLogs = DB.logsOnDay(logDraft.date);
+    const isToday = logDraft.date === todayISO();
     view.innerHTML = `
       <h2>Log a workout</h2>
       ${renderBackupBanner()}
       <div class="card">
+        <div class="field">
+          <label>Date</label>
+          <input type="date" id="logDateInput" value="${logDraft.date}" max="${todayISO()}" />
+        </div>
         <div class="field">
           <label>Exercise</label>
           <select id="exerciseSelect">${exerciseOptions(logDraft.exerciseId)}</select>
@@ -150,8 +155,8 @@
       ${renderPlanQuickStart()}
 
       <div class="section-gap">
-        <h3>Today${todays.length ? '' : ' — nothing logged yet'}</h3>
-        ${todays.length ? renderLogEntries(todays) : ''}
+        <h3>${isToday ? 'Today' : fmtDate(logDraft.date)}${dayLogs.length ? '' : ' — nothing logged yet'}</h3>
+        ${dayLogs.length ? renderLogEntries(dayLogs) : ''}
       </div>
     `;
     renderSetsInto(document.getElementById('setsContainer'));
@@ -225,11 +230,102 @@
             <div class="meta">${esc(setsStr)}</div>
           </div>
           <div class="actions">
+            <button data-action="edit-log" data-id="${l.id}" aria-label="Edit">✏️</button>
             <button data-action="delete-log" data-id="${l.id}" aria-label="Delete">🗑</button>
           </div>
         </div>`;
       })
       .join('')}</div>`;
+  }
+
+  // Lets you fix a past entry (or add a forgotten set to it) without
+  // re-entering everything from scratch.
+  function editLogModal(log) {
+    const ex = DB.exerciseById(log.exerciseId);
+    const type = exerciseType(log.exerciseId);
+    let draftSets = log.sets.map((s) => {
+      const out = {};
+      fieldsForType(type).forEach((f) => (out[f.key] = s[f.key] !== undefined ? String(s[f.key]) : ''));
+      return out;
+    });
+    let draftDate = log.date.slice(0, 10);
+
+    openModal(
+      ex ? `Edit ${ex.name}` : 'Edit entry',
+      `
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="editLogDate" value="${draftDate}" max="${todayISO()}" />
+      </div>
+      <div id="editSetsContainer"></div>
+      <button class="btn secondary" id="editAddSetBtn" style="margin-bottom:10px;">+ Add set</button>
+      <button class="btn" id="editSaveBtn">Save changes</button>
+    `
+    );
+
+    function renderEditSets() {
+      const container = document.getElementById('editSetsContainer');
+      if (!container) return;
+      const fields = fieldsForType(type);
+      container.innerHTML = draftSets
+        .map((s, i) => {
+          const inputs = fields
+            .map((f, fi) => {
+              const placeholder = f.key === 'weight' ? `weight (${unit()})` : f.placeholder;
+              const sep = type === 'strength' && fi === 0 ? '<span class="x">×</span>' : '';
+              return `<input type="number" inputmode="decimal" placeholder="${esc(placeholder)}" data-edit-field="${f.key}" data-idx="${i}" value="${esc(s[f.key])}" />${sep}`;
+            })
+            .join('');
+          return `
+        <div class="set-row">
+          <span class="set-idx">${i + 1}</span>
+          ${inputs}
+          ${draftSets.length > 1 ? `<button class="remove-set" data-edit-remove="${i}">✕</button>` : ''}
+        </div>`;
+        })
+        .join('');
+    }
+    renderEditSets();
+
+    document.getElementById('editLogDate').addEventListener('change', (e) => {
+      draftDate = e.target.value;
+    });
+    document.getElementById('editSetsContainer').addEventListener('input', (e) => {
+      const field = e.target.dataset.editField;
+      if (field) {
+        const idx = Number(e.target.dataset.idx);
+        draftSets[idx][field] = e.target.value;
+      }
+    });
+    document.getElementById('editSetsContainer').addEventListener('click', (e) => {
+      const idx = e.target.dataset.editRemove;
+      if (idx !== undefined) {
+        draftSets.splice(Number(idx), 1);
+        renderEditSets();
+      }
+    });
+    document.getElementById('editAddSetBtn').addEventListener('click', () => {
+      const last = draftSets.at(-1) || {};
+      const next = {};
+      fieldsForType(type).forEach((f) => (next[f.key] = last[f.key] || ''));
+      draftSets.push(next);
+      renderEditSets();
+    });
+    document.getElementById('editSaveBtn').addEventListener('click', () => {
+      const validSets = draftSets.filter((s) => Object.values(s).some((v) => v !== ''));
+      if (!validSets.length) {
+        alert('Add at least one set.');
+        return;
+      }
+      const coerced = validSets.map((s) => {
+        const out = {};
+        Object.keys(s).forEach((k) => (out[k] = Number(s[k]) || 0));
+        return out;
+      });
+      DB.updateLog(log.id, { date: draftDate || log.date, sets: coerced });
+      closeModal();
+      render();
+    });
   }
 
   // ---------- PLANS TAB ----------
@@ -628,6 +724,9 @@
       logDraft.exerciseId = e.target.value;
       setDraftDefaultsForExercise(logDraft.exerciseId);
       renderLog();
+    } else if (e.target.id === 'logDateInput') {
+      logDraft.date = e.target.value || todayISO();
+      renderLog();
     } else if (e.target.id === 'progressExerciseSelect') {
       progressExerciseId = e.target.value;
       renderProgress();
@@ -667,14 +766,17 @@
         alert('Add at least one set.');
         return;
       }
-      DB.addLog(logDraft.exerciseId, validSets);
+      DB.addLog(logDraft.exerciseId, validSets, null, logDraft.date);
       const type = exerciseType(logDraft.exerciseId);
-      logDraft = { exerciseId: logDraft.exerciseId, sets: [emptySet(type)] };
+      logDraft = { exerciseId: logDraft.exerciseId, sets: [emptySet(type)], date: logDraft.date };
       setDraftDefaultsForExercise(logDraft.exerciseId);
       renderLog();
     } else if (action === 'delete-log') {
       DB.deleteLog(btn.dataset.id);
       render();
+    } else if (action === 'edit-log') {
+      const log = DB.state.logs.find((l) => l.id === btn.dataset.id);
+      if (log) editLogModal(log);
     } else if (action === 'manage-exercises') {
       manageExercisesModal();
     } else if (action === 'pick-plan-exercise') {
