@@ -324,7 +324,7 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--text-dim); font-weight: 700
 }
 .stat-box .lbl { font-size: 10px; color: var(--text-faint); margin-top: 3px; font-weight: 600; letter-spacing: 0.3px; }
 
-canvas#progressChart {
+canvas#progressChart, canvas#weightChart {
   width: 100%;
   height: 180px;
   background: var(--card);
