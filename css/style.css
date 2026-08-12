@@ -332,6 +332,66 @@ canvas#progressChart, canvas#weightChart {
   border-radius: var(--radius);
 }
 
+/* ---------- progress: metric tabs ---------- */
+.metric-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.metric-tabs .chip {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--card);
+  margin: 0;
+}
+
+/* ---------- progress: personal records ---------- */
+.records-card { padding: 4px 16px; }
+.record-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.record-row:last-child { border-bottom: none; }
+.record-val { font-weight: 700; color: var(--text); }
+
+/* ---------- progress: trend & delta indicators ---------- */
+.trend { font-size: 12px; margin-left: 4px; }
+.trend-up { color: #6ee7b7; }
+.trend-down { color: var(--danger); }
+.trend-flat { color: var(--text-faint); }
+.delta { display: block; font-size: 11px; margin-top: 3px; font-weight: 600; }
+.delta-up { color: #6ee7b7; }
+.delta-down { color: var(--danger); }
+.delta-flat { color: var(--text-faint); }
+.pr-badge { font-size: 12px; margin-left: 2px; }
+
+/* ---------- progress: all-exercises overview ---------- */
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.overview-card {
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 12px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.overview-card:active { transform: scale(0.97); }
+.overview-card.active { border-color: var(--accent-b); background: var(--card-hi); }
+.oc-name { font-size: 13px; font-weight: 700; color: var(--text); }
+.oc-meta { font-size: 11px; color: var(--text-faint); margin: 2px 0 8px; }
+.oc-bottom { display: flex; align-items: center; justify-content: space-between; font-size: 11px; }
+.oc-date { color: var(--text-dim); }
+
 .day-header {
   font-size: 12px;
   color: var(--text-faint);

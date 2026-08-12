@@ -5,6 +5,7 @@
 
   let currentTab = 'log';
   let progressExerciseId = null;
+  let progressMetric = null;
 
   // Draft state for the "add a set of logs" form on the Log tab.
   let logDraft = { exerciseId: '', planExerciseIds: null, sets: [{ weight: '', reps: '' }], date: todayISO() };
@@ -17,6 +18,20 @@
   const STRENGTH_FIELDS = [
     { key: 'weight', placeholder: null },
     { key: 'reps', placeholder: 'reps' },
+  ];
+
+  // Metrics selectable on the Progress tab. Each log (a session) is reduced
+  // to a single number per metric so it can be charted / compared over time.
+  const STRENGTH_METRICS = [
+    { key: 'weight', label: 'Weight' },
+    { key: 'reps', label: 'Reps' },
+    { key: 'volume', label: 'Volume' },
+    { key: '1rm', label: 'Est. 1RM' },
+  ];
+  const CARDIO_METRICS = [
+    { key: 'speed', label: 'Speed' },
+    { key: 'time', label: 'Time' },
+    { key: 'incline', label: 'Incline' },
   ];
 
   // ---------- helpers ----------
@@ -391,18 +406,85 @@
   }
 
   // ---------- PROGRESS TAB ----------
+  function metricsForType(type) {
+    return type === 'cardio' ? CARDIO_METRICS : STRENGTH_METRICS;
+  }
+  // Epley formula: a standard way to estimate a one-rep max from any set.
+  function epley1RM(weight, reps) {
+    if (!weight || !reps) return 0;
+    return Math.round(weight * (1 + reps / 30) * 10) / 10;
+  }
+  // Reduces one logged session down to a single number for a given metric,
+  // so sessions can be charted and compared over time.
+  function computeLogMetric(log, metricKey) {
+    if (metricKey === 'volume') {
+      return log.sets.reduce((sum, s) => sum + (s.weight || 0) * (s.reps || 0), 0);
+    }
+    if (metricKey === '1rm') {
+      return log.sets.reduce((m, s) => Math.max(m, epley1RM(s.weight || 0, s.reps || 0)), 0);
+    }
+    return log.sets.reduce((m, s) => Math.max(m, s[metricKey] || 0), 0);
+  }
+  function metricSuffix(metricKey) {
+    if (metricKey === 'reps') return '';
+    if (metricKey === 'weight' || metricKey === 'volume' || metricKey === '1rm') return unit();
+    if (metricKey === 'speed') return 'mph';
+    if (metricKey === 'time') return 'min';
+    if (metricKey === 'incline') return '%';
+    return '';
+  }
+  function formatMetricValue(value, metricKey) {
+    return `${value}${metricSuffix(metricKey)}`;
+  }
+  // Personal record (best-ever value) for every metric of an exercise.
+  function exercisePRs(logs, type) {
+    const prs = {};
+    metricsForType(type).forEach((m) => {
+      prs[m.key] = logs.reduce((best, l) => Math.max(best, computeLogMetric(l, m.key)), 0);
+    });
+    return prs;
+  }
+  // Up/down/flat vs. the previous session, using each type's headline metric.
+  function exerciseTrend(logs, type) {
+    if (logs.length < 2) return null;
+    const key = type === 'cardio' ? 'speed' : 'weight';
+    const last = computeLogMetric(logs[logs.length - 1], key);
+    const prev = computeLogMetric(logs[logs.length - 2], key);
+    if (last > prev) return 'up';
+    if (last < prev) return 'down';
+    return 'flat';
+  }
+  function trendGlyph(trend) {
+    if (trend === 'up') return '<span class="trend trend-up">▲</span>';
+    if (trend === 'down') return '<span class="trend trend-down">▼</span>';
+    if (trend === 'flat') return '<span class="trend trend-flat">–</span>';
+    return '';
+  }
+  function formatDelta(value, prevValue, metricKey) {
+    if (prevValue === null || prevValue === undefined) return '';
+    const diff = Math.round((value - prevValue) * 10) / 10;
+    if (diff === 0) return '<span class="delta delta-flat">– no change</span>';
+    const cls = diff > 0 ? 'delta-up' : 'delta-down';
+    const arrow = diff > 0 ? '▲' : '▼';
+    const sign = diff > 0 ? '+' : '';
+    return `<span class="delta ${cls}">${arrow} ${sign}${diff}${metricSuffix(metricKey)} vs last time</span>`;
+  }
+
   function renderProgress() {
     if (!progressExerciseId && DB.state.exercises.length) progressExerciseId = DB.state.exercises[0].id;
     const type = exerciseType(progressExerciseId);
+    const metrics = metricsForType(type);
+    if (!metrics.find((m) => m.key === progressMetric)) progressMetric = metrics[0].key;
     const logs = progressExerciseId ? DB.logsForExercise(progressExerciseId) : [];
+    const prs = exercisePRs(logs, type);
+    const currentMetric = metrics.find((m) => m.key === progressMetric);
+    const lastDate = logs.length ? fmtDate(logs[logs.length - 1].date) : '—';
 
-    let bestValue = 0,
-      totalSessions = logs.length,
-      lastDate = '—';
-    const metricKey = type === 'cardio' ? 'speed' : 'weight';
-    logs.forEach((l) => l.sets.forEach((s) => (bestValue = Math.max(bestValue, s[metricKey] || 0))));
-    if (logs.length) lastDate = fmtDate(logs[logs.length - 1].date);
-    const bestLabel = type === 'cardio' ? 'MAX SPEED' : `MAX ${unit().toUpperCase()}`;
+    const rows = logs.map((l, i) => ({
+      log: l,
+      value: computeLogMetric(l, progressMetric),
+      prevValue: i > 0 ? computeLogMetric(logs[i - 1], progressMetric) : null,
+    }));
 
     view.innerHTML = `
       <h2>Progress</h2>
@@ -410,38 +492,90 @@
         <select id="progressExerciseSelect">${exerciseOptions(progressExerciseId)}</select>
       </div>
 
+      <div class="metric-tabs">
+        ${metrics
+          .map((m) => `<button class="chip ${m.key === progressMetric ? 'active' : ''}" data-action="pick-metric" data-key="${m.key}">${m.label}</button>`)
+          .join('')}
+      </div>
+
       <div class="stat-grid">
-        <div class="stat-box"><div class="val">${bestValue || '—'}</div><div class="lbl">${bestLabel}</div></div>
-        <div class="stat-box"><div class="val">${totalSessions}</div><div class="lbl">SESSIONS</div></div>
+        <div class="stat-box"><div class="val">${prs[progressMetric] ? formatMetricValue(prs[progressMetric], progressMetric) : '—'}</div><div class="lbl">PR ${esc(currentMetric.label.toUpperCase())}</div></div>
+        <div class="stat-box"><div class="val">${logs.length}</div><div class="lbl">SESSIONS</div></div>
         <div class="stat-box"><div class="val">${lastDate}</div><div class="lbl">LAST DONE</div></div>
       </div>
 
       <canvas id="progressChart" width="600" height="180"></canvas>
 
       <div class="section-gap">
+        <h3>Personal records</h3>
+        <div class="card records-card">
+          ${metrics
+            .map(
+              (m) =>
+                `<div class="record-row"><span>${esc(m.label)}</span><span class="record-val">${prs[m.key] ? formatMetricValue(prs[m.key], m.key) : '—'}</span></div>`
+            )
+            .join('')}
+        </div>
+      </div>
+
+      <div class="section-gap">
         <h3>Session history</h3>
         ${
-          logs.length
-            ? `<div class="card">${logs
+          rows.length
+            ? `<div class="card">${rows
                 .slice()
                 .reverse()
-                .map((l) => {
-                  const best = l.sets.reduce((m, s) => Math.max(m, s[metricKey] || 0), 0);
+                .map(({ log: l, value, prevValue }) => {
                   const setsStr = setsSummary(l);
-                  const bestStr = type === 'cardio' ? `top ${best}mph` : `best ${best}${unit()}`;
-                  return `<div class="list-item"><div><div>${fmtDate(l.date)}</div><div class="meta">${esc(setsStr)}</div></div><div class="meta">${bestStr}</div></div>`;
+                  const isPR = value > 0 && value === prs[progressMetric];
+                  return `
+                  <div class="list-item">
+                    <div>
+                      <div>${fmtDate(l.date)} ${isPR ? '<span class="pr-badge" title="Personal record">🏆</span>' : ''}</div>
+                      <div class="meta">${esc(setsStr)}</div>
+                      ${formatDelta(value, prevValue, progressMetric)}
+                    </div>
+                    <div class="meta">${value ? formatMetricValue(value, progressMetric) : '—'}</div>
+                  </div>`;
                 })
                 .join('')}</div>`
             : '<div class="empty-state">No history for this exercise yet.</div>'
         }
       </div>
+
+      ${renderProgressOverview()}
     `;
 
-    drawChart(logs, metricKey);
+    drawChart(logs, progressMetric);
+  }
+
+  function renderProgressOverview() {
+    if (!DB.state.exercises.length) return '';
+    const exs = DB.state.exercises.slice().sort((a, b) => a.name.localeCompare(b.name));
+    return `
+      <div class="section-gap">
+        <h3>All exercises</h3>
+        <div class="overview-grid">
+          ${exs
+            .map((e) => {
+              const logs = DB.logsForExercise(e.id);
+              const trend = exerciseTrend(logs, e.type);
+              const lastStr = logs.length ? fmtDate(logs[logs.length - 1].date) : 'Not logged yet';
+              return `
+              <button class="overview-card ${e.id === progressExerciseId ? 'active' : ''}" data-action="pick-progress-exercise" data-id="${e.id}">
+                <div class="oc-name">${esc(e.name)}</div>
+                <div class="oc-meta">${esc(e.muscle || '')}</div>
+                <div class="oc-bottom"><span class="oc-date">${esc(lastStr)}</span>${trendGlyph(trend)}</div>
+              </button>`;
+            })
+            .join('')}
+        </div>
+      </div>
+    `;
   }
 
   function drawChart(logs, metricKey) {
-    const points = logs.map((l) => Math.max(...l.sets.map((s) => s[metricKey] || 0)));
+    const points = logs.map((l) => computeLogMetric(l, metricKey));
     drawPointsChart('progressChart', points);
   }
 
@@ -729,6 +863,7 @@
       renderLog();
     } else if (e.target.id === 'progressExerciseSelect') {
       progressExerciseId = e.target.value;
+      progressMetric = null;
       renderProgress();
     }
   });
@@ -811,6 +946,13 @@
     } else if (action === 'delete-weight') {
       DB.deleteBodyWeight(btn.dataset.id);
       renderWeight();
+    } else if (action === 'pick-progress-exercise') {
+      progressExerciseId = btn.dataset.id;
+      progressMetric = null;
+      renderProgress();
+    } else if (action === 'pick-metric') {
+      progressMetric = btn.dataset.key;
+      renderProgress();
     }
   });
 
