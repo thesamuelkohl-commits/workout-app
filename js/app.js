@@ -6,6 +6,8 @@
   let currentTab = 'log';
   let progressExerciseId = null;
   let progressMetric = null;
+  let progressView = 'exercise'; // 'exercise' | 'day'
+  let progressDayFocus = null;
 
   // Draft state for the "add a set of logs" form on the Log tab.
   let logDraft = { exerciseId: '', planExerciseIds: null, sets: [{ weight: '', reps: '' }], date: todayISO() };
@@ -471,6 +473,20 @@
   }
 
   function renderProgress() {
+    if (progressView === 'day') renderProgressDay();
+    else renderProgressByExercise();
+  }
+
+  function renderProgressTabs() {
+    return `
+      <div class="seg-control">
+        <button class="seg-btn ${progressView === 'exercise' ? 'active' : ''}" data-action="progress-view" data-view="exercise">By Exercise</button>
+        <button class="seg-btn ${progressView === 'day' ? 'active' : ''}" data-action="progress-view" data-view="day">By Day</button>
+      </div>
+    `;
+  }
+
+  function renderProgressByExercise() {
     if (!progressExerciseId && DB.state.exercises.length) progressExerciseId = DB.state.exercises[0].id;
     const type = exerciseType(progressExerciseId);
     const metrics = metricsForType(type);
@@ -488,6 +504,7 @@
 
     view.innerHTML = `
       <h2>Progress</h2>
+      ${renderProgressTabs()}
       <div class="field">
         <select id="progressExerciseSelect">${exerciseOptions(progressExerciseId)}</select>
       </div>
@@ -577,6 +594,102 @@
   function drawChart(logs, metricKey) {
     const points = logs.map((l) => computeLogMetric(l, metricKey));
     drawPointsChart('progressChart', points);
+  }
+
+  // ---------- PROGRESS TAB: by-day view ----------
+  // Muscle groups touched on a given day, used to badge it like "Legs • Glutes"
+  // without requiring a formal plan to have been used.
+  function dayMuscleSummary(dateStr) {
+    const muscles = new Set();
+    DB.logsOnDay(dateStr).forEach((l) => {
+      const ex = DB.exerciseById(l.exerciseId);
+      if (ex && ex.muscle) muscles.add(ex.muscle);
+    });
+    return Array.from(muscles);
+  }
+
+  function renderProgressDay() {
+    const days = DB.allDays();
+    if (progressDayFocus && !days.includes(progressDayFocus)) progressDayFocus = null;
+
+    view.innerHTML = `
+      <h2>Progress</h2>
+      ${renderProgressTabs()}
+      ${
+        !days.length
+          ? '<div class="empty-state">No workouts logged yet. Head to the Log tab to add one.</div>'
+          : progressDayFocus
+          ? renderDayDetail(progressDayFocus)
+          : renderDayList(days)
+      }
+    `;
+  }
+
+  function renderDayList(days) {
+    return `
+      <div class="section-gap">
+        <h3>Workout days</h3>
+        ${days
+          .map((day) => {
+            const logs = DB.logsOnDay(day);
+            const muscles = dayMuscleSummary(day);
+            const exNames = logs.map((l) => DB.exerciseById(l.exerciseId)?.name).filter(Boolean);
+            return `
+            <button class="day-card" data-action="focus-day" data-day="${day}">
+              <div class="day-card-top">
+                <span class="day-card-date">${esc(fmtDate(day))}</span>
+                <span class="day-card-count">${logs.length} exercise${logs.length === 1 ? '' : 's'}</span>
+              </div>
+              <div class="day-card-tags">${
+                muscles.length
+                  ? muscles.map((m) => `<span class="chip">${esc(m)}</span>`).join('')
+                  : `<span class="meta">${esc(exNames.join(', '))}</span>`
+              }</div>
+            </button>`;
+          })
+          .join('')}
+      </div>
+    `;
+  }
+
+  function renderDayDetail(day) {
+    const logs = DB.logsOnDay(day);
+    const muscles = dayMuscleSummary(day);
+    return `
+      <button class="btn ghost small" data-action="unfocus-day" style="margin-bottom:14px;">← All days</button>
+      <h3 style="margin-bottom:4px;">${esc(fmtDate(day))}</h3>
+      ${muscles.length ? `<div style="margin-bottom:14px;">${muscles.map((m) => `<span class="chip">${esc(m)}</span>`).join('')}</div>` : ''}
+      <div class="card">
+        ${logs.map((l) => renderDayExerciseRow(l)).join('')}
+      </div>
+    `;
+  }
+
+  // Shows the exercise's progress against its *previous* session (not
+  // necessarily the previous calendar day), so the delta stays meaningful
+  // even for exercises done infrequently.
+  function renderDayExerciseRow(log) {
+    const ex = DB.exerciseById(log.exerciseId);
+    if (!ex) return '';
+    const type = exerciseType(log.exerciseId);
+    const allLogs = DB.logsForExercise(log.exerciseId);
+    const idx = allLogs.findIndex((l) => l.id === log.id);
+    const metricKey = type === 'cardio' ? 'speed' : 'weight';
+    const value = computeLogMetric(log, metricKey);
+    const prevValue = idx > 0 ? computeLogMetric(allLogs[idx - 1], metricKey) : null;
+    const prs = exercisePRs(allLogs, type);
+    const isPR = value > 0 && value === prs[metricKey];
+    const setsStr = setsSummary(log);
+    return `
+      <button class="day-ex-row" data-action="jump-to-exercise" data-id="${log.exerciseId}">
+        <div>
+          <div>${esc(ex.name)} ${isPR ? '<span class="pr-badge" title="Personal record">🏆</span>' : ''}</div>
+          <div class="meta">${esc(setsStr)}</div>
+          ${formatDelta(value, prevValue, metricKey)}
+        </div>
+        <div class="meta">${value ? formatMetricValue(value, metricKey) : '—'}</div>
+      </button>
+    `;
   }
 
   function drawWeightChart(entries) {
@@ -952,6 +1065,20 @@
       renderProgress();
     } else if (action === 'pick-metric') {
       progressMetric = btn.dataset.key;
+      renderProgress();
+    } else if (action === 'progress-view') {
+      progressView = btn.dataset.view;
+      renderProgress();
+    } else if (action === 'focus-day') {
+      progressDayFocus = btn.dataset.day;
+      renderProgress();
+    } else if (action === 'unfocus-day') {
+      progressDayFocus = null;
+      renderProgress();
+    } else if (action === 'jump-to-exercise') {
+      progressExerciseId = btn.dataset.id;
+      progressMetric = null;
+      progressView = 'exercise';
       renderProgress();
     }
   });
