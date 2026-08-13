@@ -37,13 +37,23 @@
   ];
 
   // ---------- helpers ----------
+  // Local calendar date as YYYY-MM-DD. Deliberately NOT toISOString(), which
+  // is UTC and rolls over to the next day while it's still "today" locally
+  // for anyone west of UTC (e.g. logging an evening workout in the US) —
+  // that mismatch was bucketing evening workouts under tomorrow's date.
+  function localISODate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    return localISODate(new Date());
   }
   function fmtDate(dstr) {
     const d = new Date(dstr + (dstr.length <= 10 ? 'T00:00:00' : ''));
     const today = todayISO();
-    const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const yest = localISODate(new Date(Date.now() - 86400000));
     const key = dstr.slice(0, 10);
     if (key === today) return 'Today';
     if (key === yest) return 'Yesterday';

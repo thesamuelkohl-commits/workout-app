@@ -31,6 +31,16 @@ const DB = (() => {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
+  // Local calendar date as YYYY-MM-DD. Deliberately NOT toISOString(), which
+  // is UTC and rolls over to the next day while it's still "today" locally
+  // for anyone west of UTC (e.g. logging an evening workout in the US).
+  function localISODate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   function seed() {
     return {
       exercises: DEFAULT_EXERCISES.map((e) => ({ id: uid(), ...e })),
@@ -138,7 +148,7 @@ const DB = (() => {
     addLog(exerciseId, sets, planId, dateISO) {
       const entry = {
         id: uid(),
-        date: dateISO || new Date().toISOString(),
+        date: dateISO || localISODate(new Date()),
         exerciseId,
         planId: planId || null,
         sets: sets.map((s) => {
@@ -164,7 +174,7 @@ const DB = (() => {
     // Body weight. One entry per calendar day; logging again on the same
     // day overwrites that day's value instead of creating a duplicate.
     addBodyWeight(dateISO, weight) {
-      const dateStr = (dateISO || new Date().toISOString()).slice(0, 10);
+      const dateStr = (dateISO || localISODate(new Date())).slice(0, 10);
       const w = Number(weight) || 0;
       const existing = state.bodyWeights.find((b) => b.date.slice(0, 10) === dateStr);
       if (existing) {
