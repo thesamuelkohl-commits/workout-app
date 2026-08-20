@@ -2,7 +2,8 @@
 const DB = (() => {
   const KEY = 'workoutTrackerData_v2';
 
-  // type: 'strength' (weight x reps) or 'cardio' (time / incline / speed)
+  // type: 'strength' (weight x reps), 'cardio' (time / incline / speed),
+  // or 'timed' (sets x hold time, e.g. planks — no weight or reps)
   const DEFAULT_EXERCISES = [
     { name: 'Leg Press', muscle: 'Legs', type: 'strength' },
     { name: 'Hip Thrust', muscle: 'Glutes', type: 'strength' },
@@ -21,6 +22,10 @@ const DB = (() => {
     { name: 'Step Up', muscle: 'Legs', type: 'strength' },
     { name: 'Walking Lunges', muscle: 'Legs', type: 'strength' },
     { name: 'Abs', muscle: 'Core', type: 'strength' },
+    { name: 'Plank', muscle: 'Core', type: 'timed' },
+    { name: 'Cable Crunch', muscle: 'Core', type: 'strength' },
+    { name: 'Pallof Press', muscle: 'Core', type: 'strength' },
+    { name: '45 Degree Back Extension', muscle: 'Back', type: 'strength' },
     { name: 'Treadmill', muscle: 'Cardio', type: 'cardio' },
     { name: 'Goblet Squat', muscle: 'Legs', type: 'strength' },
     { name: 'Rows', muscle: 'Back', type: 'strength' },
@@ -107,7 +112,8 @@ const DB = (() => {
 
     // Exercises
     addExercise(name, muscle, type) {
-      const ex = { id: uid(), name: name.trim(), muscle: (muscle || '').trim(), type: type === 'cardio' ? 'cardio' : 'strength' };
+      const validType = type === 'cardio' || type === 'timed' ? type : 'strength';
+      const ex = { id: uid(), name: name.trim(), muscle: (muscle || '').trim(), type: validType };
       state.exercises.push(ex);
       persist();
       return ex;

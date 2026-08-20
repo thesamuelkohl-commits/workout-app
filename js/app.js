@@ -21,6 +21,7 @@
     { key: 'weight', placeholder: null },
     { key: 'reps', placeholder: 'reps' },
   ];
+  const TIMED_FIELDS = [{ key: 'time', placeholder: 'time (sec)' }];
 
   // Metrics selectable on the Progress tab. Each log (a session) is reduced
   // to a single number per metric so it can be charted / compared over time.
@@ -34,6 +35,10 @@
     { key: 'speed', label: 'Speed' },
     { key: 'time', label: 'Time' },
     { key: 'incline', label: 'Incline' },
+  ];
+  const TIMED_METRICS = [
+    { key: 'time', label: 'Max Hold' },
+    { key: 'totalTime', label: 'Total Time' },
   ];
 
   // ---------- helpers ----------
@@ -123,10 +128,13 @@
     );
   }
   function exerciseType(exId) {
-    return DB.exerciseById(exId)?.type === 'cardio' ? 'cardio' : 'strength';
+    const t = DB.exerciseById(exId)?.type;
+    return t === 'cardio' || t === 'timed' ? t : 'strength';
   }
   function fieldsForType(type) {
-    return type === 'cardio' ? CARDIO_FIELDS : STRENGTH_FIELDS;
+    if (type === 'cardio') return CARDIO_FIELDS;
+    if (type === 'timed') return TIMED_FIELDS;
+    return STRENGTH_FIELDS;
   }
   function emptySet(type) {
     const out = {};
@@ -235,6 +243,9 @@
       if (s.incline) parts.push(`${s.incline}% incline`);
       if (s.speed) parts.push(`${s.speed}mph`);
       return parts.join(' • ') || '—';
+    }
+    if (type === 'timed') {
+      return s.time ? `${s.time}s` : '—';
     }
     return `${s.weight}${unit()}×${s.reps}`;
   }
@@ -419,7 +430,9 @@
 
   // ---------- PROGRESS TAB ----------
   function metricsForType(type) {
-    return type === 'cardio' ? CARDIO_METRICS : STRENGTH_METRICS;
+    if (type === 'cardio') return CARDIO_METRICS;
+    if (type === 'timed') return TIMED_METRICS;
+    return STRENGTH_METRICS;
   }
   // Epley formula: a standard way to estimate a one-rep max from any set.
   function epley1RM(weight, reps) {
@@ -435,18 +448,23 @@
     if (metricKey === '1rm') {
       return log.sets.reduce((m, s) => Math.max(m, epley1RM(s.weight || 0, s.reps || 0)), 0);
     }
+    if (metricKey === 'totalTime') {
+      return log.sets.reduce((sum, s) => sum + (s.time || 0), 0);
+    }
     return log.sets.reduce((m, s) => Math.max(m, s[metricKey] || 0), 0);
   }
-  function metricSuffix(metricKey) {
+  // `time` means minutes for cardio (treadmill) but seconds for a timed hold
+  // (plank), so the type has to disambiguate the suffix.
+  function metricSuffix(metricKey, type) {
     if (metricKey === 'reps') return '';
     if (metricKey === 'weight' || metricKey === 'volume' || metricKey === '1rm') return unit();
     if (metricKey === 'speed') return 'mph';
-    if (metricKey === 'time') return 'min';
+    if (metricKey === 'time' || metricKey === 'totalTime') return type === 'timed' ? 's' : 'min';
     if (metricKey === 'incline') return '%';
     return '';
   }
-  function formatMetricValue(value, metricKey) {
-    return `${value}${metricSuffix(metricKey)}`;
+  function formatMetricValue(value, metricKey, type) {
+    return `${value}${metricSuffix(metricKey, type)}`;
   }
   // Personal record (best-ever value) for every metric of an exercise.
   function exercisePRs(logs, type) {
@@ -459,7 +477,7 @@
   // Up/down/flat vs. the previous session, using each type's headline metric.
   function exerciseTrend(logs, type) {
     if (logs.length < 2) return null;
-    const key = type === 'cardio' ? 'speed' : 'weight';
+    const key = type === 'cardio' ? 'speed' : type === 'timed' ? 'time' : 'weight';
     const last = computeLogMetric(logs[logs.length - 1], key);
     const prev = computeLogMetric(logs[logs.length - 2], key);
     if (last > prev) return 'up';
@@ -472,14 +490,14 @@
     if (trend === 'flat') return '<span class="trend trend-flat">–</span>';
     return '';
   }
-  function formatDelta(value, prevValue, metricKey) {
+  function formatDelta(value, prevValue, metricKey, type) {
     if (prevValue === null || prevValue === undefined) return '';
     const diff = Math.round((value - prevValue) * 10) / 10;
     if (diff === 0) return '<span class="delta delta-flat">– no change</span>';
     const cls = diff > 0 ? 'delta-up' : 'delta-down';
     const arrow = diff > 0 ? '▲' : '▼';
     const sign = diff > 0 ? '+' : '';
-    return `<span class="delta ${cls}">${arrow} ${sign}${diff}${metricSuffix(metricKey)} vs last time</span>`;
+    return `<span class="delta ${cls}">${arrow} ${sign}${diff}${metricSuffix(metricKey, type)} vs last time</span>`;
   }
 
   function renderProgress() {
@@ -526,7 +544,7 @@
       </div>
 
       <div class="stat-grid">
-        <div class="stat-box"><div class="val">${prs[progressMetric] ? formatMetricValue(prs[progressMetric], progressMetric) : '—'}</div><div class="lbl">PR ${esc(currentMetric.label.toUpperCase())}</div></div>
+        <div class="stat-box"><div class="val">${prs[progressMetric] ? formatMetricValue(prs[progressMetric], progressMetric, type) : '—'}</div><div class="lbl">PR ${esc(currentMetric.label.toUpperCase())}</div></div>
         <div class="stat-box"><div class="val">${logs.length}</div><div class="lbl">SESSIONS</div></div>
         <div class="stat-box"><div class="val">${lastDate}</div><div class="lbl">LAST DONE</div></div>
       </div>
@@ -539,7 +557,7 @@
           ${metrics
             .map(
               (m) =>
-                `<div class="record-row"><span>${esc(m.label)}</span><span class="record-val">${prs[m.key] ? formatMetricValue(prs[m.key], m.key) : '—'}</span></div>`
+                `<div class="record-row"><span>${esc(m.label)}</span><span class="record-val">${prs[m.key] ? formatMetricValue(prs[m.key], m.key, type) : '—'}</span></div>`
             )
             .join('')}
         </div>
@@ -560,9 +578,9 @@
                     <div>
                       <div>${fmtDate(l.date)} ${isPR ? '<span class="pr-badge" title="Personal record">🏆</span>' : ''}</div>
                       <div class="meta">${esc(setsStr)}</div>
-                      ${formatDelta(value, prevValue, progressMetric)}
+                      ${formatDelta(value, prevValue, progressMetric, type)}
                     </div>
-                    <div class="meta">${value ? formatMetricValue(value, progressMetric) : '—'}</div>
+                    <div class="meta">${value ? formatMetricValue(value, progressMetric, type) : '—'}</div>
                   </div>`;
                 })
                 .join('')}</div>`
@@ -684,7 +702,7 @@
     const type = exerciseType(log.exerciseId);
     const allLogs = DB.logsForExercise(log.exerciseId);
     const idx = allLogs.findIndex((l) => l.id === log.id);
-    const metricKey = type === 'cardio' ? 'speed' : 'weight';
+    const metricKey = type === 'cardio' ? 'speed' : type === 'timed' ? 'time' : 'weight';
     const value = computeLogMetric(log, metricKey);
     const prevValue = idx > 0 ? computeLogMetric(allLogs[idx - 1], metricKey) : null;
     const prs = exercisePRs(allLogs, type);
@@ -695,9 +713,9 @@
         <div>
           <div>${esc(ex.name)} ${isPR ? '<span class="pr-badge" title="Personal record">🏆</span>' : ''}</div>
           <div class="meta">${esc(setsStr)}</div>
-          ${formatDelta(value, prevValue, metricKey)}
+          ${formatDelta(value, prevValue, metricKey, type)}
         </div>
-        <div class="meta">${value ? formatMetricValue(value, metricKey) : '—'}</div>
+        <div class="meta">${value ? formatMetricValue(value, metricKey, type) : '—'}</div>
       </button>
     `;
   }
@@ -872,6 +890,7 @@
         <select id="newExType" style="margin-top:8px;width:100%;">
           <option value="strength">Strength (weight × reps)</option>
           <option value="cardio">Cardio (time / incline / speed)</option>
+          <option value="timed">Timed hold (sets × time)</option>
         </select>
         <button class="btn secondary" id="addExBtn" style="margin-top:10px;">Add exercise</button>
       </div>
@@ -899,7 +918,7 @@
       .map(
         (e) => `
       <div class="list-item">
-        <div><div>${esc(e.name)}</div><div class="meta">${esc(e.muscle || '')}${e.type === 'cardio' ? ' • Cardio' : ''}</div></div>
+        <div><div>${esc(e.name)}</div><div class="meta">${esc(e.muscle || '')}${e.type === 'cardio' ? ' • Cardio' : e.type === 'timed' ? ' • Timed' : ''}</div></div>
         <div class="actions"><button data-action="delete-exercise" data-id="${e.id}">🗑</button></div>
       </div>`
       )
