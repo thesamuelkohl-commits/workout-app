@@ -514,8 +514,25 @@
     `;
   }
 
+  // The exercise the Progress tab opens on. Previously this was just
+  // exercises[0] — always Leg Press — so the per-exercise SESSIONS count
+  // showed Leg Press's history to someone who had come to look at the
+  // workout they just finished, and read as a broken total. Opening on the
+  // most recently logged exercise matches what you came to check.
+  function defaultProgressExerciseId() {
+    const logs = DB.state.logs;
+    if (logs.length) {
+      const latest = logs
+        .slice()
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+        .pop();
+      if (latest && DB.exerciseById(latest.exerciseId)) return latest.exerciseId;
+    }
+    return DB.state.exercises.length ? DB.state.exercises[0].id : null;
+  }
+
   function renderProgressByExercise() {
-    if (!progressExerciseId && DB.state.exercises.length) progressExerciseId = DB.state.exercises[0].id;
+    if (!progressExerciseId) progressExerciseId = defaultProgressExerciseId();
     const type = exerciseType(progressExerciseId);
     const metrics = metricsForType(type);
     if (!metrics.find((m) => m.key === progressMetric)) progressMetric = metrics[0].key;
@@ -545,7 +562,7 @@
 
       <div class="stat-grid">
         <div class="stat-box"><div class="val">${prs[progressMetric] ? formatMetricValue(prs[progressMetric], progressMetric, type) : '—'}</div><div class="lbl">PR ${esc(currentMetric.label.toUpperCase())}</div></div>
-        <div class="stat-box"><div class="val">${logs.length}</div><div class="lbl">SESSIONS</div></div>
+        <div class="stat-box"><div class="val">${logs.length}</div><div class="lbl">SESSIONS OF THIS</div></div>
         <div class="stat-box"><div class="val">${lastDate}</div><div class="lbl">LAST DONE</div></div>
       </div>
 
