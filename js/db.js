@@ -36,6 +36,17 @@ const DB = (() => {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
+  // Exercise names are compared loosely when looking for duplicates: case
+  // and runs of whitespace shouldn't make "Back Extension" and "back
+  // extension" look like two different exercises.
+  function nameKey(name) {
+    return (name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function countLogs(exerciseId) {
+    return state.logs.filter((l) => l.exerciseId === exerciseId).length;
+  }
+
   // Local calendar date as YYYY-MM-DD. Deliberately NOT toISOString(), which
   // is UTC and rolls over to the next day while it's still "today" locally
   // for anyone west of UTC (e.g. logging an evening workout in the US).
@@ -111,12 +122,17 @@ const DB = (() => {
     },
 
     // Exercises
+    // Returns { exercise, created }. A name that already exists is NOT added
+    // again: a second entry with the same name splits that exercise's history
+    // across two ids, and nothing in the Progress tab can see across the split.
     addExercise(name, muscle, type) {
       const validType = type === 'cardio' || type === 'timed' ? type : 'strength';
+      const existing = state.exercises.find((e) => nameKey(e.name) === nameKey(name));
+      if (existing) return { exercise: existing, created: false };
       const ex = { id: uid(), name: name.trim(), muscle: (muscle || '').trim(), type: validType };
       state.exercises.push(ex);
       persist();
-      return ex;
+      return { exercise: ex, created: true };
     },
     updateExercise(id, fields) {
       const ex = state.exercises.find((e) => e.id === id);
@@ -226,6 +242,65 @@ const DB = (() => {
       const days = new Set(state.logs.map((l) => l.date.slice(0, 10)));
       return Array.from(days).sort((a, b) => (a < b ? 1 : -1));
     },
+    // ---- Data repair ----
+    // Two exercises sharing a name silently split one exercise's history in
+    // two. Returns groups of 2+ such exercises, each ordered with the
+    // most-logged entry first, since that's the sensible thing to merge into.
+    duplicateExerciseGroups() {
+      const byName = new Map();
+      state.exercises.forEach((e) => {
+        const key = nameKey(e.name);
+        if (!byName.has(key)) byName.set(key, []);
+        byName.get(key).push(e);
+      });
+      return Array.from(byName.values())
+        .filter((group) => group.length > 1)
+        .map((group) => group.slice().sort((a, b) => countLogs(b.id) - countLogs(a.id)));
+    },
+
+    // Logs whose exercise no longer exists. History renders these as
+    // "Unknown exercise", but the Progress tab can't reach them at all,
+    // so they look like history that silently disappeared.
+    orphanedLogs() {
+      const ids = new Set(state.exercises.map((e) => e.id));
+      return state.logs.filter((l) => !ids.has(l.exerciseId));
+    },
+
+    // Moves every log and plan slot from one exercise onto another, then
+    // drops the now-empty source exercise.
+    mergeExercises(fromId, toId) {
+      if (fromId === toId) return 0;
+      let moved = 0;
+      state.logs.forEach((l) => {
+        if (l.exerciseId === fromId) {
+          l.exerciseId = toId;
+          moved++;
+        }
+      });
+      state.plans.forEach((p) => {
+        const mapped = (p.exerciseIds || []).map((id) => (id === fromId ? toId : id));
+        p.exerciseIds = mapped.filter((id, i, arr) => arr.indexOf(id) === i);
+      });
+      state.exercises = state.exercises.filter((e) => e.id !== fromId);
+      persist();
+      return moved;
+    },
+
+    // Points orphaned logs back at a real exercise so their history shows up
+    // in Progress again. Returns how many were reattached.
+    reassignOrphanedLogs(toId) {
+      const ids = new Set(state.exercises.map((e) => e.id));
+      let moved = 0;
+      state.logs.forEach((l) => {
+        if (!ids.has(l.exerciseId)) {
+          l.exerciseId = toId;
+          moved++;
+        }
+      });
+      persist();
+      return moved;
+    },
+
     exportJSON() {
       return JSON.stringify(state, null, 2);
     },

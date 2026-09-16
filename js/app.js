@@ -698,7 +698,18 @@
   // even for exercises done infrequently.
   function renderDayExerciseRow(log) {
     const ex = DB.exerciseById(log.exerciseId);
-    if (!ex) return '';
+    // An orphaned log (its exercise was removed) used to be dropped here
+    // without a trace, so the day's totals silently disagreed with History.
+    // Show it, flagged, so it can be reattached from Manage exercises.
+    if (!ex) {
+      return `
+      <div class="day-ex-row">
+        <div>
+          <div>Unknown exercise</div>
+          <div class="meta">${esc(setsSummary(log))}</div>
+        </div>
+      </div>`;
+    }
     const type = exerciseType(log.exerciseId);
     const allLogs = DB.logsForExercise(log.exerciseId);
     const idx = allLogs.findIndex((l) => l.id === log.id);
@@ -894,22 +905,111 @@
         </select>
         <button class="btn secondary" id="addExBtn" style="margin-top:10px;">Add exercise</button>
       </div>
+      <div id="repairWrap"></div>
       <div id="exerciseListWrap"></div>
     `
     );
+    renderRepairWrap();
     renderExerciseListWrap();
     document.getElementById('addExBtn').addEventListener('click', () => {
       const name = document.getElementById('newExName').value.trim();
       const muscle = document.getElementById('newExMuscle').value.trim();
       const type = document.getElementById('newExType').value;
       if (!name) return;
-      DB.addExercise(name, muscle, type);
+      const { created } = DB.addExercise(name, muscle, type);
+      if (!created) {
+        alert(`"${name}" already exists — using the existing one so its history stays in one place.`);
+      }
       document.getElementById('newExName').value = '';
       document.getElementById('newExMuscle').value = '';
       renderExerciseListWrap();
       render();
     });
   }
+  // Surfaces the two ways an exercise's history gets split so it stops
+  // showing up in Progress: a duplicate exercise holding half the logs, and
+  // logs whose exercise no longer exists. Both are one-click fixable here.
+  function renderRepairWrap() {
+    const wrap = document.getElementById('repairWrap');
+    if (!wrap) return;
+    const groups = DB.duplicateExerciseGroups();
+    const orphans = DB.orphanedLogs();
+    if (!groups.length && !orphans.length) {
+      wrap.innerHTML = '';
+      return;
+    }
+
+    const groupHTML = groups
+      .map((group) => {
+        const [keep, ...rest] = group;
+        const keepCount = DB.logsForExercise(keep.id).length;
+        const restTotal = rest.reduce((n, e) => n + DB.logsForExercise(e.id).length, 0);
+        return `
+        <div class="list-item">
+          <div>
+            <div>${esc(keep.name)}</div>
+            <div class="meta">${group.length} copies — ${keepCount} session${keepCount === 1 ? '' : 's'} on one, ${restTotal} on the other${rest.length === 1 ? '' : 's'}</div>
+          </div>
+          <div class="actions">
+            <button class="btn secondary small" data-action="merge-duplicate" data-keep="${keep.id}">Merge</button>
+          </div>
+        </div>`;
+      })
+      .join('');
+
+    const orphanHTML = orphans.length
+      ? `
+      <div class="list-item">
+        <div>
+          <div>${orphans.length} log${orphans.length === 1 ? '' : 's'} with no exercise</div>
+          <div class="meta">Shown as "Unknown exercise" in History and missing from Progress.</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Reattach them to</label>
+        <select id="orphanTarget">${exerciseOptions('')}</select>
+        <button class="btn secondary" id="reattachOrphansBtn" style="margin-top:10px;">Reattach ${orphans.length} log${orphans.length === 1 ? '' : 's'}</button>
+      </div>`
+      : '';
+
+    wrap.innerHTML = `
+      <div class="field">
+        <label>Split history</label>
+        <div class="card">${groupHTML}${orphanHTML}</div>
+      </div>
+    `;
+
+    wrap.querySelectorAll('[data-action="merge-duplicate"]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const keepId = btn.dataset.keep;
+        const keep = DB.exerciseById(keepId);
+        const group = DB.duplicateExerciseGroups().find((g) => g.some((e) => e.id === keepId));
+        if (!keep || !group) return;
+        const dupes = group.filter((e) => e.id !== keepId);
+        const moving = dupes.reduce((n, e) => n + DB.logsForExercise(e.id).length, 0);
+        if (!confirm(`Merge ${dupes.length + 1} copies of "${keep.name}" into one? ${moving} session${moving === 1 ? '' : 's'} will move over. This can't be undone.`)) return;
+        dupes.forEach((e) => DB.mergeExercises(e.id, keepId));
+        renderRepairWrap();
+        renderExerciseListWrap();
+        render();
+      })
+    );
+
+    const reattachBtn = document.getElementById('reattachOrphansBtn');
+    if (reattachBtn) {
+      reattachBtn.addEventListener('click', () => {
+        const target = document.getElementById('orphanTarget').value;
+        const ex = DB.exerciseById(target);
+        if (!ex) return;
+        if (!confirm(`Reattach ${orphans.length} orphaned log${orphans.length === 1 ? '' : 's'} to "${ex.name}"? This can't be undone.`)) return;
+        DB.reassignOrphanedLogs(target);
+        renderRepairWrap();
+        renderExerciseListWrap();
+        render();
+      });
+    }
+  }
+
   function renderExerciseListWrap() {
     const wrap = document.getElementById('exerciseListWrap');
     if (!wrap) return;
@@ -927,6 +1027,7 @@
       btn.addEventListener('click', () => {
         if (!confirm('Delete this exercise? Its logs and plan entries will be removed too.')) return;
         DB.deleteExercise(btn.dataset.id);
+        renderRepairWrap();
         renderExerciseListWrap();
         render();
       })
