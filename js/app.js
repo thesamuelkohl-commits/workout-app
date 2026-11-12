@@ -68,6 +68,38 @@
     return DB.state.settings.unit || 'lbs';
   }
 
+  // Weights live in state as lbs. Everything the user sees or types goes
+  // through these, so switching units converts rather than just relabelling.
+  function toDisplay(lbs) {
+    return DB.toDisplayWeight(lbs || 0, unit());
+  }
+  function toCanonical(value, entryUnit) {
+    return DB.toCanonicalWeight(value, entryUnit || unit());
+  }
+  // Trims the trailing .0 so lbs stay clean while kg keeps its decimal.
+  function numStr(n) {
+    return String(Math.round(n * 10) / 10);
+  }
+  function fmtWeight(lbs, withUnit = true) {
+    return `${numStr(toDisplay(lbs))}${withUnit ? unit() : ''}`;
+  }
+
+  // The unit the next entry is typed in. Starts at the display unit but can
+  // be flipped per entry, so a machine labelled in kg can be logged as kg
+  // without changing the whole app.
+  let entryUnit = null;
+  function currentEntryUnit() {
+    return entryUnit || unit();
+  }
+  function unitToggle(action) {
+    const u = currentEntryUnit();
+    return `
+      <div class="unit-toggle" role="group" aria-label="Entry unit">
+        <button type="button" class="unit-btn ${u === 'lbs' ? 'active' : ''}" data-action="${action}" data-unit="lbs">lbs</button>
+        <button type="button" class="unit-btn ${u === 'kg' ? 'active' : ''}" data-action="${action}" data-unit="kg">kg</button>
+      </div>`;
+  }
+
   // ---------- backup reminders ----------
   const BACKUP_KEY = 'workoutTrackerLastBackup';
   const BACKUP_DISMISS_KEY = 'workoutTrackerBackupDismissUntil';
@@ -147,7 +179,11 @@
     if (lastLog) {
       logDraft.sets = lastLog.sets.map((s) => {
         const out = {};
-        fieldsForType(type).forEach((f) => (out[f.key] = s[f.key] !== undefined ? String(s[f.key]) : ''));
+        fieldsForType(type).forEach((f) => {
+          if (s[f.key] === undefined) return (out[f.key] = '');
+          // Stored weights are lbs; show them in whatever unit is being typed.
+          out[f.key] = f.key === 'weight' ? numStr(DB.toDisplayWeight(s[f.key], currentEntryUnit())) : String(s[f.key]);
+        });
         return out;
       });
     } else {
@@ -179,6 +215,10 @@
         <div class="field">
           <label>Exercise</label>
           <select id="exerciseSelect">${exerciseOptions(logDraft.exerciseId)}</select>
+        </div>
+        <div class="unit-row">
+          <span class="unit-label">Entering in</span>
+          ${unitToggle('set-entry-unit')}
         </div>
         <div id="setsContainer"></div>
         <button class="btn secondary" data-action="add-set" style="margin-bottom:10px;">+ Add set</button>
@@ -221,7 +261,7 @@
       .map((s, i) => {
         const inputs = fields
           .map((f, fi) => {
-            const placeholder = f.key === 'weight' ? `weight (${unit()})` : f.placeholder;
+            const placeholder = f.key === 'weight' ? `weight (${currentEntryUnit()})` : f.placeholder;
             const sep = type === 'strength' && fi === 0 ? '<span class="x">×</span>' : '';
             return `<input type="number" inputmode="decimal" placeholder="${esc(placeholder)}" data-set-field="${f.key}" data-idx="${i}" value="${esc(s[f.key])}" />${sep}`;
           })
@@ -247,7 +287,7 @@
     if (type === 'timed') {
       return s.time ? `${s.time}s` : '—';
     }
-    return `${s.weight}${unit()}×${s.reps}`;
+    return `${fmtWeight(s.weight)}×${s.reps}`;
   }
   function setsSummary(l) {
     const type = exerciseType(l.exerciseId);
@@ -281,11 +321,19 @@
   function editLogModal(log) {
     const ex = DB.exerciseById(log.exerciseId);
     const type = exerciseType(log.exerciseId);
-    let draftSets = log.sets.map((s) => {
-      const out = {};
-      fieldsForType(type).forEach((f) => (out[f.key] = s[f.key] !== undefined ? String(s[f.key]) : ''));
-      return out;
-    });
+    // The modal keeps its own entry unit so editing an old kg session
+    // doesn't flip the unit for the main log form.
+    let editUnit = unit();
+    const setsInUnit = (u) =>
+      log.sets.map((s) => {
+        const out = {};
+        fieldsForType(type).forEach((f) => {
+          if (s[f.key] === undefined) return (out[f.key] = '');
+          out[f.key] = f.key === 'weight' ? numStr(DB.toDisplayWeight(s[f.key], u)) : String(s[f.key]);
+        });
+        return out;
+      });
+    let draftSets = setsInUnit(editUnit);
     let draftDate = log.date.slice(0, 10);
 
     openModal(
@@ -294,6 +342,10 @@
       <div class="field">
         <label>Date</label>
         <input type="date" id="editLogDate" value="${draftDate}" max="${todayISO()}" />
+      </div>
+      <div class="unit-row">
+        <span class="unit-label">Entering in</span>
+        <div class="unit-toggle" role="group" aria-label="Entry unit" id="editUnitToggle"></div>
       </div>
       <div id="editSetsContainer"></div>
       <button class="btn secondary" id="editAddSetBtn" style="margin-bottom:10px;">+ Add set</button>
@@ -309,7 +361,7 @@
         .map((s, i) => {
           const inputs = fields
             .map((f, fi) => {
-              const placeholder = f.key === 'weight' ? `weight (${unit()})` : f.placeholder;
+              const placeholder = f.key === 'weight' ? `weight (${editUnit})` : f.placeholder;
               const sep = type === 'strength' && fi === 0 ? '<span class="x">×</span>' : '';
               return `<input type="number" inputmode="decimal" placeholder="${esc(placeholder)}" data-edit-field="${f.key}" data-idx="${i}" value="${esc(s[f.key])}" />${sep}`;
             })
@@ -323,6 +375,30 @@
         })
         .join('');
     }
+    function renderEditUnitToggle() {
+      const host = document.getElementById('editUnitToggle');
+      if (!host) return;
+      host.innerHTML = ['lbs', 'kg']
+        .map((u) => `<button type="button" class="unit-btn ${u === editUnit ? 'active' : ''}" data-edit-unit="${u}">${u}</button>`)
+        .join('');
+      host.querySelectorAll('[data-edit-unit]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const next = b.dataset.editUnit;
+          if (next === editUnit) return;
+          draftSets.forEach((set) => {
+            if (set.weight !== undefined && set.weight !== '') {
+              const lbs = DB.toCanonicalWeight(set.weight, editUnit);
+              set.weight = numStr(DB.toDisplayWeight(lbs, next));
+            }
+          });
+          editUnit = next;
+          renderEditUnitToggle();
+          renderEditSets();
+        })
+      );
+    }
+
+    renderEditUnitToggle();
     renderEditSets();
 
     document.getElementById('editLogDate').addEventListener('change', (e) => {
@@ -357,7 +433,9 @@
       }
       const coerced = validSets.map((s) => {
         const out = {};
-        Object.keys(s).forEach((k) => (out[k] = Number(s[k]) || 0));
+        Object.keys(s).forEach((k) => {
+          out[k] = k === 'weight' ? DB.toCanonicalWeight(s[k], editUnit) : Number(s[k]) || 0;
+        });
         return out;
       });
       DB.updateLog(log.id, { date: draftDate || log.date, sets: coerced });
@@ -463,8 +541,14 @@
     if (metricKey === 'incline') return '%';
     return '';
   }
+  // volume and 1RM are derived from weight, so they're in lbs too and need
+  // the same conversion before they're shown.
+  function isWeightMetric(metricKey) {
+    return metricKey === 'weight' || metricKey === 'volume' || metricKey === '1rm';
+  }
   function formatMetricValue(value, metricKey, type) {
-    return `${value}${metricSuffix(metricKey, type)}`;
+    const shown = isWeightMetric(metricKey) ? numStr(toDisplay(value)) : value;
+    return `${shown}${metricSuffix(metricKey, type)}`;
   }
   // Personal record (best-ever value) for every metric of an exercise.
   function exercisePRs(logs, type) {
@@ -492,7 +576,8 @@
   }
   function formatDelta(value, prevValue, metricKey, type) {
     if (prevValue === null || prevValue === undefined) return '';
-    const diff = Math.round((value - prevValue) * 10) / 10;
+    const rawDiff = isWeightMetric(metricKey) ? toDisplay(value) - toDisplay(prevValue) : value - prevValue;
+    const diff = Math.round(rawDiff * 10) / 10;
     if (diff === 0) return '<span class="delta delta-flat">– no change</span>';
     const cls = diff > 0 ? 'delta-up' : 'delta-down';
     const arrow = diff > 0 ? '▲' : '▼';
@@ -638,7 +723,7 @@
 
   function drawChart(logs, metricKey) {
     const points = logs.map((l) => computeLogMetric(l, metricKey));
-    drawPointsChart('progressChart', points);
+    drawPointsChart('progressChart', isWeightMetric(metricKey) ? points.map(toDisplay) : points);
   }
 
   // ---------- PROGRESS TAB: by-day view ----------
@@ -749,7 +834,7 @@
   }
 
   function drawWeightChart(entries) {
-    drawPointsChart('weightChart', entries.map((e) => e.weight));
+    drawPointsChart('weightChart', entries.map((e) => toDisplay(e.weight)));
   }
 
   function drawPointsChart(canvasId, points) {
@@ -814,7 +899,7 @@
     const latest = entries.length ? entries[entries.length - 1] : null;
     const first = entries.length ? entries[0] : null;
     const hasChange = entries.length > 1;
-    const change = hasChange ? latest.weight - first.weight : 0;
+    const change = hasChange ? toDisplay(latest.weight) - toDisplay(first.weight) : 0;
     const changeStr = hasChange ? `${change > 0 ? '+' : ''}${change.toFixed(1)}${unit()}` : '—';
 
     view.innerHTML = `
@@ -826,15 +911,21 @@
             <input type="date" id="weightDateInput" value="${todayISO()}" />
           </div>
           <div class="field">
-            <label>Weight (${unit()})</label>
-            <input type="number" inputmode="decimal" id="weightValueInput" placeholder="e.g. 145" value="${todayEntry ? todayEntry.weight : ''}" />
+            <label>Weight (${currentEntryUnit()})</label>
+            <input type="number" inputmode="decimal" id="weightValueInput" placeholder="${currentEntryUnit() === 'kg' ? 'e.g. 66' : 'e.g. 145'}" value="${
+              todayEntry ? numStr(DB.toDisplayWeight(todayEntry.weight, currentEntryUnit())) : ''
+            }" />
           </div>
+        </div>
+        <div class="unit-row">
+          <span class="unit-label">Entering in</span>
+          ${unitToggle('weight-entry-unit')}
         </div>
         <button class="btn" data-action="save-weight">Save weight</button>
       </div>
 
       <div class="stat-grid">
-        <div class="stat-box"><div class="val">${latest ? latest.weight : '—'}</div><div class="lbl">CURRENT ${unit().toUpperCase()}</div></div>
+        <div class="stat-box"><div class="val">${latest ? numStr(toDisplay(latest.weight)) : '—'}</div><div class="lbl">CURRENT ${unit().toUpperCase()}</div></div>
         <div class="stat-box"><div class="val">${entries.length}</div><div class="lbl">ENTRIES</div></div>
         <div class="stat-box"><div class="val">${changeStr}</div><div class="lbl">CHANGE</div></div>
       </div>
@@ -853,7 +944,7 @@
               <div class="list-item">
                 <div>${fmtDate(e.date)}</div>
                 <div style="display:flex;align-items:center;gap:14px;">
-                  <div class="meta">${e.weight}${unit()}</div>
+                  <div class="meta">${fmtWeight(e.weight)}</div>
                   <div class="actions"><button data-action="delete-weight" data-id="${e.id}" aria-label="Delete">🗑</button></div>
                 </div>
               </div>`
@@ -1079,6 +1170,7 @@
     );
     document.getElementById('unitSelect').addEventListener('change', (e) => {
       DB.setUnit(e.target.value);
+      entryUnit = null;
       render();
     });
     document.getElementById('exportBtn').addEventListener('click', () => {
@@ -1141,7 +1233,22 @@
     if (!btn) return;
     const action = btn.dataset.action;
 
-    if (action === 'add-set') {
+    if (action === 'set-entry-unit') {
+      const next = btn.dataset.unit;
+      const prev = currentEntryUnit();
+      if (next !== prev) {
+        // Convert what's already typed so the real weight doesn't change
+        // out from under the user when they flip the toggle.
+        logDraft.sets.forEach((set) => {
+          if (set.weight !== undefined && set.weight !== '') {
+            const lbs = DB.toCanonicalWeight(set.weight, prev);
+            set.weight = numStr(DB.toDisplayWeight(lbs, next));
+          }
+        });
+        entryUnit = next;
+        renderLog();
+      }
+    } else if (action === 'add-set') {
       const type = exerciseType(logDraft.exerciseId);
       const last = logDraft.sets.at(-1) || {};
       const next = {};
@@ -1161,7 +1268,15 @@
         alert('Add at least one set.');
         return;
       }
-      DB.addLog(logDraft.exerciseId, validSets, null, logDraft.date);
+      // Typed in whatever the toggle says; stored in lbs.
+      const canonicalSets = validSets.map((set) => {
+        const out = { ...set };
+        if (out.weight !== undefined && out.weight !== '') {
+          out.weight = toCanonical(out.weight, currentEntryUnit());
+        }
+        return out;
+      });
+      DB.addLog(logDraft.exerciseId, canonicalSets, null, logDraft.date);
       const type = exerciseType(logDraft.exerciseId);
       logDraft = { exerciseId: logDraft.exerciseId, sets: [emptySet(type)], date: logDraft.date };
       setDraftDefaultsForExercise(logDraft.exerciseId);
@@ -1201,8 +1316,25 @@
         alert('Enter a weight first.');
         return;
       }
-      DB.addBodyWeight(dateEl && dateEl.value ? dateEl.value : todayISO(), val);
+      DB.addBodyWeight(dateEl && dateEl.value ? dateEl.value : todayISO(), toCanonical(val, currentEntryUnit()));
       renderWeight();
+    } else if (action === 'weight-entry-unit') {
+      const next = btn.dataset.unit;
+      const prev = currentEntryUnit();
+      if (next !== prev) {
+        const valEl = document.getElementById('weightValueInput');
+        if (valEl && valEl.value !== '') {
+          const lbs = DB.toCanonicalWeight(valEl.value, prev);
+          valEl.value = numStr(DB.toDisplayWeight(lbs, next));
+        }
+        const typed = valEl ? valEl.value : '';
+        entryUnit = next;
+        renderWeight();
+        // renderWeight rebuilds the input from stored data, so put back what
+        // was mid-edit rather than silently discarding it.
+        const after = document.getElementById('weightValueInput');
+        if (after && typed !== '') after.value = typed;
+      }
     } else if (action === 'delete-weight') {
       DB.deleteBodyWeight(btn.dataset.id);
       renderWeight();

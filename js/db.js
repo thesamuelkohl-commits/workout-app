@@ -32,6 +32,17 @@ const DB = (() => {
     { name: 'Glute Bridges', muscle: 'Glutes', type: 'strength' },
   ];
 
+  // Weights are stored in ONE canonical unit (lbs) everywhere in state; the
+  // unit setting only controls how they're displayed and entered. Before
+  // this, weights were bare numbers in whatever unit happened to be selected,
+  // so flipping the setting relabelled without converting and 100lbs silently
+  // became "100kg".
+  const LBS_PER_KG = 2.20462262185;
+
+  function round4(n) {
+    return Math.round(n * 10000) / 10000;
+  }
+
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
@@ -59,6 +70,7 @@ const DB = (() => {
 
   function seed() {
     return {
+      schemaVersion: 2,
       exercises: DEFAULT_EXERCISES.map((e) => ({ id: uid(), ...e })),
       plans: [],
       logs: [],
@@ -80,6 +92,25 @@ const DB = (() => {
     return data;
   }
 
+  // Converts data saved before weights were canonical. Anything recorded
+  // while kg was the selected unit was stored as kg, so it becomes lbs once.
+  // Guarded by schemaVersion so it can never run twice and double-convert.
+  function migrateToCanonicalLbs(data) {
+    if (Number(data.schemaVersion) >= 2) return data;
+    if (data.settings && data.settings.unit === 'kg') {
+      (data.logs || []).forEach((l) =>
+        (l.sets || []).forEach((set) => {
+          if (set.weight) set.weight = round4(set.weight * LBS_PER_KG);
+        })
+      );
+      (data.bodyWeights || []).forEach((b) => {
+        if (b.weight) b.weight = round4(b.weight * LBS_PER_KG);
+      });
+    }
+    data.schemaVersion = 2;
+    return data;
+  }
+
   function load() {
     try {
       const raw = localStorage.getItem(KEY);
@@ -95,6 +126,7 @@ const DB = (() => {
       data.bodyWeights = data.bodyWeights || [];
       data.settings = data.settings || { unit: 'lbs' };
       fillMissingDefaults(data);
+      migrateToCanonicalLbs(data);
       save(data);
       return data;
     } catch (e) {
@@ -216,6 +248,17 @@ const DB = (() => {
         .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     },
 
+    // Weight conversion. State is always lbs; these are for display/entry.
+    LBS_PER_KG,
+    toDisplayWeight(lbs, displayUnit) {
+      const v = displayUnit === 'kg' ? lbs / LBS_PER_KG : lbs;
+      return Math.round(v * 10) / 10;
+    },
+    toCanonicalWeight(value, entryUnit) {
+      const n = Number(value) || 0;
+      return entryUnit === 'kg' ? round4(n * LBS_PER_KG) : n;
+    },
+
     // Settings
     setUnit(unit) {
       state.settings.unit = unit;
@@ -304,8 +347,16 @@ const DB = (() => {
     exportJSON() {
       return JSON.stringify(state, null, 2);
     },
+    // An imported backup may predate canonical weights, so it gets the same
+    // normalisation and migration a fresh load would apply.
     importJSON(json) {
       const data = JSON.parse(json);
+      data.exercises = (data.exercises || []).map((e) => ({ type: 'strength', ...e }));
+      data.plans = data.plans || [];
+      data.logs = data.logs || [];
+      data.bodyWeights = data.bodyWeights || [];
+      data.settings = data.settings || { unit: 'lbs' };
+      migrateToCanonicalLbs(data);
       state = data;
       persist();
     },
