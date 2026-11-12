@@ -1075,14 +1075,12 @@
         <label>Import data (JSON file)</label>
         <input type="file" id="importFile" accept="application/json" />
       </div>
-      <button class="btn ghost" id="lockNowBtn">Lock app</button>
     `
     );
     document.getElementById('unitSelect').addEventListener('change', (e) => {
       DB.setUnit(e.target.value);
       render();
     });
-    document.getElementById('lockNowBtn').addEventListener('click', () => Lock.lockNow());
     document.getElementById('exportBtn').addEventListener('click', () => {
       doExport();
       const statusEl = document.getElementById('backupStatus');
@@ -1287,10 +1285,5 @@
     document.body.appendChild(el);
   }
 
-  // Nothing is rendered until the passcode gate clears, so no workout data
-  // is ever sitting in the DOM behind the lock overlay.
-  Lock.guard(() => {
-    document.body.classList.remove('locked');
-    render();
-  });
+  render();
 })();
